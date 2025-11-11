@@ -6,7 +6,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('icon.ico', '.')],
     hiddenimports=[
         'PyQt5',
         'PyQt5.QtCore',
@@ -52,4 +52,5 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon='icon.ico',  # Use our custom icon
+    manifest='ActivityTracker.manifest',  # Use custom manifest for proper taskbar grouping
 )

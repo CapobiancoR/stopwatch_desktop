@@ -36,6 +36,16 @@ class ActivityDatabase:
             )
         ''')
         
+        # Table for pause/break periods
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS pause_periods (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                pause_start TEXT NOT NULL,
+                duration_seconds INTEGER NOT NULL
+            )
+        ''')
+        
         conn.commit()
         conn.close()
     
@@ -154,3 +164,58 @@ class ActivityDatabase:
         conn.close()
         
         return results
+    
+    def log_pause(self, duration_seconds: int):
+        """Log a pause/break period"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        now = datetime.now()
+        date_str = now.strftime("%Y-%m-%d")
+        pause_start = now.strftime("%H:%M:%S")
+        
+        cursor.execute('''
+            INSERT INTO pause_periods (date, pause_start, duration_seconds)
+            VALUES (?, ?, ?)
+        ''', (date_str, pause_start, int(duration_seconds)))
+        
+        conn.commit()
+        conn.close()
+    
+    def get_pause_periods(self, days: int = 7) -> List[Tuple[str, str, int]]:
+        """Get pause periods for the last N days"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT date, pause_start, duration_seconds
+            FROM pause_periods
+            WHERE date >= date('now', '-' || ? || ' days')
+            ORDER BY date DESC, pause_start DESC
+        ''', (days,))
+        
+        results = cursor.fetchall()
+        conn.close()
+        
+        return results
+    
+    def get_today_pause_stats(self) -> Tuple[int, int]:
+        """Get today's pause statistics (total_seconds, count)"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        today = datetime.now().strftime("%Y-%m-%d")
+        
+        cursor.execute('''
+            SELECT 
+                COALESCE(SUM(duration_seconds), 0) as total_seconds,
+                COUNT(*) as count
+            FROM pause_periods
+            WHERE date = ?
+        ''', (today,))
+        
+        result = cursor.fetchone()
+        conn.close()
+        
+        return (result[0], result[1]) if result else (0, 0)
+
