@@ -38,23 +38,42 @@ class ActivityTracker:
     def on_activity(self):
         """Callback called when activity is detected"""
         with self.lock:
-            self.last_activity = time.time()
-            if not self.is_active:
-                # User became active after idle period
-                if self.idle_start is not None:
-                    # Calculate idle duration and trigger callback
-                    idle_duration = time.time() - self.idle_start
-                    print(f"[TRACKER] Calling callback with duration: {idle_duration:.1f}s")
+            current_time = time.time()
+            
+            # Check if user was idle (idle_start is set)
+            was_idle = (self.idle_start is not None)
+            
+            # Update last activity time
+            self.last_activity = current_time
+            
+            # If user was idle and now is active, trigger callback
+            if was_idle:
+                # Calculate idle duration
+                idle_duration = current_time - self.idle_start
+                print(f"[TRACKER] User returned from pause. Duration: {idle_duration:.1f}s (threshold: {self.idle_threshold}s)")
+                
+                # Only log if idle duration exceeded threshold
+                if idle_duration >= self.idle_threshold:
+                    # Call callback BEFORE resetting state
                     if self.on_idle_callback:
-                        # Call callback with idle duration in seconds
-                        self.on_idle_callback(idle_duration)
-                    self.idle_start = None
+                        print(f"[TRACKER] Calling callback with duration: {idle_duration:.1f}s")
+                        try:
+                            self.on_idle_callback(idle_duration)
+                        except Exception as e:
+                            print(f"[TRACKER ERROR] Callback failed: {e}")
+                    
                     self.logger.info(f"User active again after {idle_duration:.0f}s pause")
                 else:
-                    self.logger.info("User active")
+                    print(f"[TRACKER] Idle duration {idle_duration:.1f}s below threshold {self.idle_threshold}s - not logging")
                 
+                # Reset idle tracking
+                self.idle_start = None
+            
+            # Mark user as active if they weren't
+            if not self.is_active:
                 self.is_active = True
-                self.session_start = time.time()
+                self.session_start = current_time
+                self.logger.info("User active")
     
     def on_mouse_move(self, x, y):
         """Callback for mouse movement"""
@@ -114,20 +133,29 @@ class ActivityTracker:
     
     def _check_idle(self):
         """Thread that checks if user is idle"""
+        last_log_time = 0
         while self.running:
-            time.sleep(1)
+            time.sleep(0.5)  # Check every 500ms for more responsiveness
             
             with self.lock:
-                idle_time = time.time() - self.last_activity
+                current_time = time.time()
+                idle_time = current_time - self.last_activity
                 
+                # Debug log every 10 seconds when approaching idle threshold
+                if idle_time > (self.idle_threshold * 0.8) and (current_time - last_log_time) > 10:
+                    print(f"[TRACKER CHECK] Idle time: {idle_time:.1f}s / {self.idle_threshold}s (threshold), is_active={self.is_active}")
+                    last_log_time = current_time
+                
+                # User has been idle long enough
                 if idle_time > self.idle_threshold and self.is_active:
-                    # User became idle
+                    # Mark user as inactive
                     if self.session_start:
-                        self.total_active_time += time.time() - self.session_start
+                        self.total_active_time += current_time - self.session_start
                     
                     # Start tracking idle period if not already tracking
                     if self.idle_start is None:
-                        self.idle_start = time.time()
+                        self.idle_start = current_time
+                        print(f"[TRACKER] ⏸️ User became IDLE after {idle_time:.1f}s of inactivity (threshold: {self.idle_threshold}s)")
                     
                     self.is_active = False
                     self.session_start = None

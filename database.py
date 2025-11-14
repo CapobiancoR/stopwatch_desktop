@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import List, Tuple, Optional
 
 class ActivityDatabase:
@@ -42,6 +42,7 @@ class ActivityDatabase:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 date TEXT NOT NULL,
                 pause_start TEXT NOT NULL,
+                pause_end TEXT,
                 duration_seconds INTEGER NOT NULL
             )
         ''')
@@ -172,16 +173,19 @@ class ActivityDatabase:
         
         now = datetime.now()
         date_str = now.strftime("%Y-%m-%d")
-        pause_start = now.strftime("%H:%M:%S")
+        pause_start = (now - timedelta(seconds=int(duration_seconds))).strftime("%H:%M:%S")
+        pause_end = now.strftime("%H:%M:%S")
+        
+        print(f"[DATABASE] Logging pause: date={date_str}, start={pause_start}, end={pause_end}, duration={duration_seconds}s")
         
         cursor.execute('''
-            INSERT INTO pause_periods (date, pause_start, duration_seconds)
-            VALUES (?, ?, ?)
-        ''', (date_str, pause_start, int(duration_seconds)))
+            INSERT INTO pause_periods (date, pause_start, pause_end, duration_seconds)
+            VALUES (?, ?, ?, ?)
+        ''', (date_str, pause_start, pause_end, int(duration_seconds)))
         
         conn.commit()
         conn.close()
-    
+        print(f"[DATABASE] Pause logged successfully")    
     def get_pause_periods(self, days: int = 7) -> List[Tuple[str, str, int]]:
         """Get pause periods for the last N days"""
         conn = sqlite3.connect(self.db_path)
@@ -218,4 +222,53 @@ class ActivityDatabase:
         conn.close()
         
         return (result[0], result[1]) if result else (0, 0)
+    
+    def get_all_sessions(self, days: int = 365) -> List[Tuple[str, str, str, int, str]]:
+        """Get all individual sessions with start/end times
+        Returns: (date, start_time, end_time, duration_seconds, session_type)
+        session_type: 'Work' or 'Leisure'
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT 
+                date,
+                start_time,
+                COALESCE(end_time, 'In Progress') as end_time,
+                duration_seconds,
+                CASE WHEN is_work = 1 THEN 'Work' ELSE 'Leisure' END as session_type
+            FROM activity_sessions
+            WHERE date >= date('now', '-' || ? || ' days')
+            ORDER BY date DESC, start_time DESC
+        ''', (days,))
+        
+        results = cursor.fetchall()
+        conn.close()
+        
+        return results
+    
+    def get_all_pauses_detailed(self, days: int = 365) -> List[Tuple[str, str, str, int]]:
+        """Get all pause periods with start/end times
+        Returns: (date, pause_start, pause_end, duration_seconds)
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT 
+                date,
+                pause_start,
+                COALESCE(pause_end, 'Unknown') as pause_end,
+                duration_seconds
+            FROM pause_periods
+            WHERE date >= date('now', '-' || ? || ' days')
+            ORDER BY date DESC, pause_start DESC
+        ''', (days,))
+        
+        results = cursor.fetchall()
+        conn.close()
+        
+        return results
+
 

@@ -5,16 +5,348 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QTabWidget, QTableWidget, QTableWidgetItem, 
                              QSystemTrayIcon, QMenu, QAction, QGraphicsDropShadowEffect,
                              QStackedWidget, QMessageBox, QSlider, QSpinBox)
-from PyQt5.QtCore import QTimer, Qt, QTime, QPoint, QPropertyAnimation, QEasingCurve
+from PyQt5.QtCore import QTimer, Qt, QTime, QPoint, QPropertyAnimation, QEasingCurve, pyqtSignal, QObject
 from PyQt5.QtGui import QFont, QColor, QPalette, QIcon, QPixmap, QPainter, QLinearGradient
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
+import numpy as np
 from datetime import datetime, timedelta
 from database import ActivityDatabase
 from tracker import ActivityTracker
 
+class AnalyticsWindow(QMainWindow):
+    """Advanced Analytics Window with multiple chart types"""
+    def __init__(self, db):
+        super().__init__()
+        self.db = db
+        self.setWindowTitle("📈 Advanced Analytics")
+        self.setGeometry(100, 100, 1400, 900)
+        self.setStyleSheet(self.get_stylesheet())
+        
+        # Main widget and layout
+        main_widget = QWidget()
+        self.setCentralWidget(main_widget)
+        layout = QVBoxLayout()
+        main_widget.setLayout(layout)
+        
+        # Create tabs for different chart types
+        tabs = QTabWidget()
+        tabs.setStyleSheet("QTabWidget::pane { border: 1px solid #3b82f6; } QTabBar::tab { background: #1e293b; color: white; padding: 8px 20px; }")
+        
+        # Tab 1: Cumulative daily stats
+        tabs.addTab(self.create_cumulative_chart(), "📊 Cumulative Stats")
+        
+        # Tab 2: Pie charts
+        tabs.addTab(self.create_pie_charts(), "🥧 Distribution")
+        
+        # Tab 3: Timeline
+        tabs.addTab(self.create_timeline_chart(), "📅 Timeline")
+        
+        # Tab 4: Pause analysis
+        tabs.addTab(self.create_pause_analysis(), "⏸ Pause Analysis")
+        
+        # Tab 5: Weekly averages
+        tabs.addTab(self.create_weekly_analysis(), "📈 Weekly Trends")
+        
+        layout.addWidget(tabs)
+        
+        # Refresh button
+        refresh_btn = QPushButton("🔄 Refresh Analytics")
+        refresh_btn.clicked.connect(self.refresh_all)
+        refresh_btn.setStyleSheet("QPushButton { background: #3b82f6; color: white; padding: 10px; border-radius: 5px; font-weight: bold; }")
+        layout.addWidget(refresh_btn)
+    
+    def get_stylesheet(self):
+        return """
+        QMainWindow { background: #0f172a; }
+        QWidget { background: #0f172a; color: white; }
+        QTabBar::tab:selected { background: #1e293b; border-bottom: 3px solid #3b82f6; }
+        QTabBar::tab { background: #0f172a; }
+        """
+    
+    def create_cumulative_chart(self):
+        """Cumulative work/leisure hours over time"""
+        widget = QWidget()
+        layout = QVBoxLayout()
+        
+        stats = self.db.get_daily_stats(90)  # Last 90 days
+        if not stats:
+            layout.addWidget(QLabel("No data available"))
+            widget.setLayout(layout)
+            return widget
+        
+        dates = [s[0] for s in stats]
+        work_hours = [s[1] / 3600 for s in stats]
+        
+        # Calculate cumulative
+        cumulative = []
+        total = 0
+        for h in work_hours:
+            total += h
+            cumulative.append(total)
+        
+        fig = Figure(figsize=(12, 5), facecolor='#1e293b')
+        ax = fig.add_subplot(111, facecolor='#1e293b')
+        
+        ax.plot(dates, cumulative, marker='o', color='#10b981', linewidth=2, markersize=4)
+        ax.fill_between(range(len(dates)), cumulative, alpha=0.3, color='#10b981')
+        
+        ax.set_title('Cumulative Work Hours (90 Days)', color='white', fontsize=14, fontweight='bold')
+        ax.set_xlabel('Date', color='white')
+        ax.set_ylabel('Hours', color='white')
+        ax.tick_params(colors='white')
+        ax.grid(True, alpha=0.2, color='white')
+        
+        for spine in ax.spines.values():
+            spine.set_color('white')
+        
+        fig.tight_layout()
+        canvas = FigureCanvas(fig)
+        layout.addWidget(canvas)
+        widget.setLayout(layout)
+        return widget
+    
+    def create_pie_charts(self):
+        """Pie charts for work/leisure/pause distribution"""
+        widget = QWidget()
+        layout = QHBoxLayout()
+        
+        stats = self.db.get_daily_stats(30)
+        pauses = self.db.get_pause_periods(days=30)
+        
+        total_work = sum(s[1] for s in stats) / 3600
+        total_leisure = sum(s[2] for s in stats) / 3600
+        total_pauses = sum(p[2] for p in pauses) / 3600
+        
+        fig = Figure(figsize=(12, 5), facecolor='#1e293b')
+        
+        # Work vs Leisure pie
+        ax1 = fig.add_subplot(121, facecolor='#1e293b')
+        colors1 = ['#10b981', '#f59e0b']
+        ax1.pie([total_work, total_leisure], labels=['Work', 'Leisure'], autopct='%1.1f%%',
+                colors=colors1, textprops={'color': 'white', 'fontweight': 'bold'})
+        ax1.set_title('Work vs Leisure (30 Days)', color='white', fontsize=12, fontweight='bold')
+        
+        # All three pie
+        ax2 = fig.add_subplot(122, facecolor='#1e293b')
+        colors2 = ['#10b981', '#f59e0b', '#8b5cf6']
+        ax2.pie([total_work, total_leisure, total_pauses], labels=['Work', 'Leisure', 'Pauses'],
+                autopct='%1.1f%%', colors=colors2, textprops={'color': 'white', 'fontweight': 'bold'})
+        ax2.set_title('All Activity Types (30 Days)', color='white', fontsize=12, fontweight='bold')
+        
+        fig.tight_layout()
+        canvas = FigureCanvas(fig)
+        layout.addWidget(canvas)
+        widget.setLayout(layout)
+        return widget
+    
+    def create_timeline_chart(self):
+        """Daily activity timeline with stacked bars"""
+        widget = QWidget()
+        layout = QVBoxLayout()
+        
+        stats = self.db.get_daily_stats(30)
+        pauses = self.db.get_pause_periods(days=30)
+        
+        if not stats:
+            layout.addWidget(QLabel("No data available"))
+            widget.setLayout(layout)
+            return widget
+        
+        dates = [s[0] for s in stats]
+        work_hours = [s[1] / 3600 for s in stats]
+        leisure_hours = [s[2] / 3600 for s in stats]
+        
+        pause_by_date = {}
+        for p in pauses:
+            if p[0] not in pause_by_date:
+                pause_by_date[p[0]] = 0
+            pause_by_date[p[0]] += p[2]
+        
+        pause_hours = [pause_by_date.get(d, 0) / 3600 for d in dates]
+        
+        fig = Figure(figsize=(12, 5), facecolor='#1e293b')
+        ax = fig.add_subplot(111, facecolor='#1e293b')
+        
+        x = range(len(dates))
+        width = 0.8
+        
+        ax.bar(x, work_hours, width, label='Work', color='#10b981', alpha=0.85)
+        ax.bar(x, leisure_hours, width, bottom=work_hours, label='Leisure', color='#f59e0b', alpha=0.85)
+        ax.bar(x, pause_hours, width, bottom=[w+l for w,l in zip(work_hours, leisure_hours)], 
+               label='Pauses', color='#8b5cf6', alpha=0.85)
+        
+        ax.set_title('Daily Activity Stacked (30 Days)', color='white', fontsize=14, fontweight='bold')
+        ax.set_xlabel('Date', color='white')
+        ax.set_ylabel('Hours', color='white')
+        ax.set_xticks(x[::3] if len(dates) > 10 else x)
+        ax.set_xticklabels([dates[i] for i in (x[::3] if len(dates) > 10 else x)], rotation=45, color='white')
+        ax.tick_params(colors='white')
+        ax.legend(loc='upper left', facecolor='#0f172a', edgecolor='white')
+        ax.grid(True, alpha=0.2, color='white', axis='y')
+        
+        for spine in ax.spines.values():
+            spine.set_color('white')
+        
+        fig.tight_layout()
+        canvas = FigureCanvas(fig)
+        layout.addWidget(canvas)
+        widget.setLayout(layout)
+        return widget
+    
+    def create_pause_analysis(self):
+        """Pause duration distribution and frequency"""
+        widget = QWidget()
+        layout = QHBoxLayout()
+        
+        pauses = self.db.get_pause_periods(days=90)
+        
+        if not pauses:
+            layout.addWidget(QLabel("No pause data available"))
+            widget.setLayout(layout)
+            return widget
+        
+        durations = [p[2] / 60 for p in pauses]  # Convert to minutes
+        dates = [p[0] for p in pauses]
+        
+        pause_by_date = {}
+        for d in dates:
+            pause_by_date[d] = pause_by_date.get(d, 0) + 1
+        
+        fig = Figure(figsize=(12, 5), facecolor='#1e293b')
+        
+        # Histogram of pause durations
+        ax1 = fig.add_subplot(121, facecolor='#1e293b')
+        ax1.hist(durations, bins=15, color='#8b5cf6', alpha=0.7, edgecolor='white')
+        ax1.set_title('Pause Duration Distribution', color='white', fontsize=12, fontweight='bold')
+        ax1.set_xlabel('Minutes', color='white')
+        ax1.set_ylabel('Frequency', color='white')
+        ax1.tick_params(colors='white')
+        
+        # Pauses per day trend
+        ax2 = fig.add_subplot(122, facecolor='#1e293b')
+        sorted_dates = sorted(pause_by_date.keys())
+        pause_counts = [pause_by_date[d] for d in sorted_dates]
+        ax2.plot(sorted_dates, pause_counts, marker='o', color='#8b5cf6', linewidth=2, markersize=5)
+        ax2.set_title('Pauses Per Day Trend', color='white', fontsize=12, fontweight='bold')
+        ax2.set_xlabel('Date', color='white')
+        ax2.set_ylabel('Count', color='white')
+        ax2.tick_params(colors='white')
+        ax2.grid(True, alpha=0.2, color='white')
+        
+        for ax in [ax1, ax2]:
+            for spine in ax.spines.values():
+                spine.set_color('white')
+        
+        fig.tight_layout()
+        canvas = FigureCanvas(fig)
+        layout.addWidget(canvas)
+        widget.setLayout(layout)
+        return widget
+    
+    def create_weekly_analysis(self):
+        """Weekly average work/leisure/pause hours with trend lines"""
+        widget = QWidget()
+        layout = QVBoxLayout()
+        
+        stats = self.db.get_daily_stats(90)
+        pauses = self.db.get_pause_periods(days=90)
+        
+        if not stats:
+            layout.addWidget(QLabel("No data available"))
+            widget.setLayout(layout)
+            return widget
+        
+        # Group data by week
+        weekly_work = {}
+        weekly_leisure = {}
+        weekly_pauses = {}
+        
+        for date_str, work_secs, leisure_secs in stats:
+            date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
+            week_num = date_obj.isocalendar()[1]
+            year = date_obj.year
+            week_key = f"W{week_num}"
+            
+            if week_key not in weekly_work:
+                weekly_work[week_key] = []
+                weekly_leisure[week_key] = []
+            
+            weekly_work[week_key].append(work_secs / 3600)
+            weekly_leisure[week_key].append(leisure_secs / 3600)
+        
+        # Group pauses by week
+        for date_str, pause_start, duration in pauses:
+            date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
+            week_num = date_obj.isocalendar()[1]
+            week_key = f"W{week_num}"
+            
+            if week_key not in weekly_pauses:
+                weekly_pauses[week_key] = []
+            
+            weekly_pauses[week_key].append(duration / 3600)
+        
+        # Calculate weekly averages
+        weeks = sorted(weekly_work.keys(), key=lambda x: int(x[1:]))
+        avg_work = [sum(weekly_work[w]) / len(weekly_work[w]) for w in weeks]
+        avg_leisure = [sum(weekly_leisure[w]) / len(weekly_leisure[w]) for w in weeks]
+        avg_pauses = [sum(weekly_pauses.get(w, [0])) / len(weekly_pauses.get(w, [1])) for w in weeks]
+        
+        fig = Figure(figsize=(12, 5), facecolor='#1e293b')
+        ax = fig.add_subplot(111, facecolor='#1e293b')
+        
+        x = range(len(weeks))
+        width = 0.25
+        
+        # Plot bars
+        bars1 = ax.bar([i - width for i in x], avg_work, width, label='Work', color='#10b981', alpha=0.85)
+        bars2 = ax.bar(x, avg_leisure, width, label='Leisure', color='#f59e0b', alpha=0.85)
+        bars3 = ax.bar([i + width for i in x], avg_pauses, width, label='Pauses', color='#8b5cf6', alpha=0.85)
+        
+        # Add trend lines
+        z_work = np.polyfit(x, avg_work, 2) if len(x) > 2 else None
+        z_leisure = np.polyfit(x, avg_leisure, 2) if len(x) > 2 else None
+        
+        if z_work:
+            p_work = np.poly1d(z_work)
+            x_smooth = np.linspace(0, len(weeks)-1, 100)
+            ax.plot(x_smooth, p_work(x_smooth), '--', color='#059669', linewidth=2, alpha=0.7, label='Work Trend')
+        
+        if z_leisure:
+            p_leisure = np.poly1d(z_leisure)
+            x_smooth = np.linspace(0, len(weeks)-1, 100)
+            ax.plot(x_smooth, p_leisure(x_smooth), '--', color='#d97706', linewidth=2, alpha=0.7, label='Leisure Trend')
+        
+        ax.set_title('Weekly Average Activity Hours (90 Days)', color='white', fontsize=14, fontweight='bold')
+        ax.set_xlabel('Week', color='white')
+        ax.set_ylabel('Hours', color='white')
+        ax.set_xticks(x)
+        ax.set_xticklabels(weeks, rotation=45, color='white')
+        ax.tick_params(colors='white')
+        ax.legend(loc='upper left', facecolor='#0f172a', edgecolor='white')
+        ax.grid(True, alpha=0.2, color='white', axis='y')
+        
+        for spine in ax.spines.values():
+            spine.set_color('white')
+        
+        fig.tight_layout()
+        canvas = FigureCanvas(fig)
+        layout.addWidget(canvas)
+        widget.setLayout(layout)
+        return widget
+    
+    def refresh_all(self):
+        """Refresh all charts"""
+        self.close()
+        new_window = AnalyticsWindow(self.db)
+        new_window.show()
+
+
 class ModernStopwatchWidget(QMainWindow):
+    # Signal for thread-safe pause detection
+    pause_detected_signal = pyqtSignal(float)
+    
     def __init__(self):
         super().__init__()
         
@@ -34,6 +366,9 @@ class ModernStopwatchWidget(QMainWindow):
         self.idle_threshold = self.load_settings()
         self.tracker = ActivityTracker(idle_threshold=self.idle_threshold)
         
+        # Connect the pause signal to the handler (thread-safe)
+        self.pause_detected_signal.connect(self.on_pause_detected_safe)
+        
         self.session_id = None
         self.session_start_time = None
         self.work_seconds = 0
@@ -43,6 +378,9 @@ class ModernStopwatchWidget(QMainWindow):
         # Pause tracking
         self.pause_seconds = 0  # Total pause time today
         self.pause_count = 0     # Number of pauses today
+        
+        # Track current date for midnight rollover
+        self.current_date = datetime.now().date()
         
         # For dragging the window
         self.dragging = False
@@ -366,63 +704,104 @@ class ModernStopwatchWidget(QMainWindow):
         widget = QWidget()
         widget.setObjectName("tabContent")
         layout = QVBoxLayout()
-        layout.setSpacing(15)
+        layout.setSpacing(20)
+        layout.setContentsMargins(15, 15, 15, 15)
         widget.setLayout(layout)
         
-        # Title with info button
-        header_layout = QHBoxLayout()
-        title = QLabel("📅 Activity History (All Records)")
-        title.setObjectName("sectionTitle")
-        title.setFont(QFont("Segoe UI", 14, QFont.Bold))
-        header_layout.addWidget(title)
+        # Activity section title
+        activity_title = QLabel("📅 Activity Sessions")
+        activity_title.setObjectName("sectionTitle")
+        activity_title.setFont(QFont("Segoe UI", 13, QFont.Bold))
+        layout.addWidget(activity_title)
         
-        header_layout.addStretch()
-        
-        layout.addLayout(header_layout)
-        
-        # Table
+        # Activity Table with Start/End times
         self.history_table = QTableWidget()
         self.history_table.setObjectName("modernTable")
-        self.history_table.setColumnCount(4)
-        self.history_table.setHorizontalHeaderLabels(["Date", "Work Time", "Leisure Time", "Total Time"])
-        self.history_table.horizontalHeader().setStretchLastSection(True)
+        self.history_table.setColumnCount(5)
+        self.history_table.setHorizontalHeaderLabels(["Date", "Start Time", "End Time", "Duration", "Type"])
+        self.history_table.horizontalHeader().setStretchLastSection(False)
         self.history_table.verticalHeader().setVisible(False)
         self.history_table.setAlternatingRowColors(True)
+        self.history_table.setRowHeight(0, 30)
+        # Set column widths
+        self.history_table.setColumnWidth(0, 90)   # Date
+        self.history_table.setColumnWidth(1, 85)   # Start Time
+        self.history_table.setColumnWidth(2, 85)   # End Time
+        self.history_table.setColumnWidth(3, 90)   # Duration
+        self.history_table.setColumnWidth(4, 80)   # Type
+        self.history_table.setMaximumHeight(300)
+        self.history_table.setStyleSheet(self.history_table.styleSheet() + """
+            QTableWidget {
+                gridline-color: #404040;
+                background-color: #1e1e1e;
+            }
+            QHeaderView::section {
+                padding: 6px;
+                background-color: #2d2d2d;
+                border: 1px solid #404040;
+                font-weight: bold;
+            }
+            QTableWidget::item {
+                padding: 6px;
+                height: 30px;
+            }
+        """)
         layout.addWidget(self.history_table)
         
         # Pauses section title
         pauses_title = QLabel("⏸️ Pause History")
         pauses_title.setObjectName("sectionTitle")
-        pauses_title.setFont(QFont("Segoe UI", 12, QFont.Bold))
+        pauses_title.setFont(QFont("Segoe UI", 13, QFont.Bold))
         layout.addWidget(pauses_title)
         
-        # Pauses table
+        # Pauses table with Start/End times
         self.pauses_table = QTableWidget()
         self.pauses_table.setObjectName("modernTable")
-        self.pauses_table.setColumnCount(3)
-        self.pauses_table.setHorizontalHeaderLabels(["Date", "Time", "Duration"])
-        self.pauses_table.horizontalHeader().setStretchLastSection(True)
+        self.pauses_table.setColumnCount(4)
+        self.pauses_table.setHorizontalHeaderLabels(["Date", "Start Time", "End Time", "Duration"])
+        self.pauses_table.horizontalHeader().setStretchLastSection(False)
         self.pauses_table.verticalHeader().setVisible(False)
         self.pauses_table.setAlternatingRowColors(True)
-        self.pauses_table.setMaximumHeight(250)
+        self.pauses_table.setRowHeight(0, 30)
+        # Set column widths
+        self.pauses_table.setColumnWidth(0, 90)   # Date
+        self.pauses_table.setColumnWidth(1, 85)   # Start Time
+        self.pauses_table.setColumnWidth(2, 85)   # End Time
+        self.pauses_table.setColumnWidth(3, 90)   # Duration
+        self.pauses_table.setMaximumHeight(280)
+        self.pauses_table.setStyleSheet(self.pauses_table.styleSheet() + """
+            QTableWidget {
+                gridline-color: #404040;
+                background-color: #1e1e1e;
+            }
+            QHeaderView::section {
+                padding: 6px;
+                background-color: #2d2d2d;
+                border: 1px solid #404040;
+                font-weight: bold;
+            }
+            QTableWidget::item {
+                padding: 6px;
+                height: 30px;
+            }
+        """)
         layout.addWidget(self.pauses_table)
+        
+        # Stretch to fill remaining space
+        layout.addStretch()
         
         # Button container
         button_layout = QHBoxLayout()
+        button_layout.setSpacing(10)
         
         # Refresh button
-        refresh_btn = QPushButton("🔄 Refresh History")
+        refresh_btn = QPushButton("� Refresh History")
         refresh_btn.setObjectName("modernButton")
         refresh_btn.clicked.connect(self.refresh_history)
+        refresh_btn.setMaximumWidth(150)
         button_layout.addWidget(refresh_btn)
         
         button_layout.addStretch()
-        
-        # Reset database button
-        reset_btn = QPushButton("🗑️ Reset Database")
-        reset_btn.setObjectName("dangerButton")
-        reset_btn.clicked.connect(self.reset_database)
-        button_layout.addWidget(reset_btn)
         
         layout.addLayout(button_layout)
         
@@ -442,16 +821,36 @@ class ModernStopwatchWidget(QMainWindow):
         title.setFont(QFont("Segoe UI", 14, QFont.Bold))
         layout.addWidget(title)
         
+        # Create scroll area for the chart (allows scrolling when many days)
+        scroll_area = QWidget()
+        scroll_layout = QVBoxLayout()
+        scroll_layout.setContentsMargins(0, 0, 0, 0)
+        scroll_area.setLayout(scroll_layout)
+        
         # Initialize matplotlib figure immediately
         self.figure = Figure(figsize=(6, 4), facecolor='#1e293b')
         self.canvas = FigureCanvas(self.figure)
-        layout.addWidget(self.canvas)
+        scroll_layout.addWidget(self.canvas)
+        scroll_layout.addStretch()
+        
+        layout.addWidget(scroll_area)
+        
+        # Buttons layout
+        buttons_layout = QHBoxLayout()
         
         # Refresh button
         refresh_btn = QPushButton("🔄 Refresh Charts")
         refresh_btn.setObjectName("modernButton")
         refresh_btn.clicked.connect(self.refresh_charts)
-        layout.addWidget(refresh_btn)
+        buttons_layout.addWidget(refresh_btn)
+        
+        # Advanced Analytics button
+        analytics_btn = QPushButton("📈 Advanced Analytics")
+        analytics_btn.setObjectName("modernButton")
+        analytics_btn.clicked.connect(self.open_analytics)
+        buttons_layout.addWidget(analytics_btn)
+        
+        layout.addLayout(buttons_layout)
         
         return widget
     
@@ -862,6 +1261,39 @@ class ModernStopwatchWidget(QMainWindow):
         self.autosave_timer = QTimer()
         self.autosave_timer.timeout.connect(self.auto_save_to_db)
         self.autosave_timer.start(60000)  # Save every 60 seconds (1 minute)
+        
+        # Date check timer - checks for midnight rollover every minute
+        self.date_check_timer = QTimer()
+        self.date_check_timer.timeout.connect(self.check_date_change)
+        self.date_check_timer.start(60000)  # Check every minute
+    
+    def check_date_change(self):
+        """Check if date has changed (midnight rollover) and reset daily counters"""
+        new_date = datetime.now().date()
+        if new_date != self.current_date:
+            print(f"[DATE CHANGE] Detected date change from {self.current_date} to {new_date}")
+            
+            # Close current session if active
+            if self.session_id is not None:
+                self.db.end_session(self.session_id)
+                self.session_id = None
+                self.session_start_time = None
+            
+            # Reset daily counters
+            self.work_seconds = 0
+            self.idle_seconds = 0
+            self.pause_seconds = 0
+            self.pause_count = 0
+            
+            # Update current date
+            self.current_date = new_date
+            
+            # Refresh UI
+            self.update_display()
+            self.refresh_history()
+            self.refresh_charts()
+            
+            print(f"[DATE CHANGE] Counters reset for new day: {new_date}")
     
     def load_today_data(self):
         """Load today's data from database"""
@@ -920,8 +1352,15 @@ class ModernStopwatchWidget(QMainWindow):
                 self.session_id = self.db.start_session(self.is_working)
                 self.session_start_time = datetime.now()
             
-            # Calculate current session time
-            current_session_seconds = (datetime.now() - self.session_start_time).total_seconds()
+            # Calculate current session time from session start
+            if self.session_start_time:
+                current_session_seconds = (datetime.now() - self.session_start_time).total_seconds()
+            else:
+                current_session_seconds = 0
+            
+            # Ensure we don't get negative time
+            if current_session_seconds < 0:
+                current_session_seconds = 0
             
             # Update database
             self.db.update_session(self.session_id, int(current_session_seconds), self.is_working)
@@ -943,8 +1382,9 @@ class ModernStopwatchWidget(QMainWindow):
                 border-radius: 10px;
             """)
         else:
-            # User is idle, close session if open
+            # User is idle - DO NOT ACCUMULATE TIME
             if self.session_id is not None:
+                # Close the active session
                 self.db.end_session(self.session_id)
                 # Reload data
                 work, idle = self.db.get_today_stats()
@@ -959,6 +1399,7 @@ class ModernStopwatchWidget(QMainWindow):
                 self.session_id = None
                 self.session_start_time = None
             
+            # During inactivity, display accumulated time only (no counting)
             display_work = self.work_seconds
             display_idle = self.idle_seconds
             self.status_label.setText("⚫ Inactive")
@@ -969,7 +1410,7 @@ class ModernStopwatchWidget(QMainWindow):
                 border-radius: 10px;
             """)
         
-        # Update displays
+        # Update displays - always show pause time and count
         self.work_time_display.setText(self.format_seconds(display_work))
         self.idle_time_display.setText(self.format_seconds(display_idle))
         self.pause_time_display.setText(self.format_seconds(self.pause_seconds))
@@ -984,27 +1425,39 @@ class ModernStopwatchWidget(QMainWindow):
         return f"{int(hours):02d}:{int(minutes):02d}:{int(secs):02d}"
     
     def refresh_history(self):
-        """Refresh history table - show all records"""
-        stats = self.db.get_daily_stats(365)  # Get last year of data (all records)
+        """Refresh history table - show all individual sessions"""
+        # Get all activity sessions (work and leisure)
+        sessions = self.db.get_all_sessions(days=365)  # Get last year of data
         
-        self.history_table.setRowCount(len(stats))
+        self.history_table.setRowCount(len(sessions))
         
-        for i, (date, work, idle) in enumerate(stats):
-            total = work + idle
-            
+        for i, (date, start_time, end_time, duration, session_type) in enumerate(sessions):
             self.history_table.setItem(i, 0, QTableWidgetItem(date))
-            self.history_table.setItem(i, 1, QTableWidgetItem(self.format_seconds(work)))
-            self.history_table.setItem(i, 2, QTableWidgetItem(self.format_seconds(idle)))
-            self.history_table.setItem(i, 3, QTableWidgetItem(self.format_seconds(total)))
+            self.history_table.setItem(i, 1, QTableWidgetItem(start_time))
+            self.history_table.setItem(i, 2, QTableWidgetItem(end_time))
+            self.history_table.setItem(i, 3, QTableWidgetItem(self.format_seconds(duration)))
+            
+            # Add colored type indicator
+            type_item = QTableWidgetItem(session_type)
+            if session_type == "Work":
+                type_item.setForeground(QColor("#10b981"))  # Green
+            else:
+                type_item.setForeground(QColor("#f59e0b"))  # Orange
+            self.history_table.setItem(i, 4, type_item)
         
-        # Refresh pauses table
-        pauses = self.db.get_pause_periods(days=7)
+        # Refresh pauses table with detailed times
+        pauses = self.db.get_all_pauses_detailed(days=365)
         self.pauses_table.setRowCount(len(pauses))
         
-        for i, (date, pause_time, duration) in enumerate(pauses):
+        for i, (date, pause_start, pause_end, duration) in enumerate(pauses):
             self.pauses_table.setItem(i, 0, QTableWidgetItem(date))
-            self.pauses_table.setItem(i, 1, QTableWidgetItem(pause_time))
-            self.pauses_table.setItem(i, 2, QTableWidgetItem(self.format_seconds(duration)))
+            self.pauses_table.setItem(i, 1, QTableWidgetItem(pause_start))
+            self.pauses_table.setItem(i, 2, QTableWidgetItem(pause_end))
+            
+            # Add colored duration
+            duration_item = QTableWidgetItem(self.format_seconds(duration))
+            duration_item.setForeground(QColor("#a855f7"))  # Purple
+            self.pauses_table.setItem(i, 3, duration_item)
     
     def show_info_dialog(self):
         """Show information dialog about how the tracker works"""
@@ -1070,76 +1523,46 @@ class ModernStopwatchWidget(QMainWindow):
         
         msg.exec_()
     
-    def reset_database(self):
-        """Reset the database with confirmation"""
-        # Confirmation dialog
-        reply = QMessageBox.warning(
-            self,
-            "Reset Database",
-            "Are you sure you want to delete all activity records?\n\nThis action cannot be undone!",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
-        
-        if reply == QMessageBox.Yes:
-            try:
-                # Stop current session
-                if self.session_id:
-                    self.db.end_session(self.session_id)
-                    self.session_id = None
-                
-                # Reset counters
-                self.work_seconds = 0
-                self.idle_seconds = 0
-                self.pause_seconds = 0
-                self.pause_count = 0
-                
-                # Delete database file and recreate it
-                db_path = os.path.join(self.app_dir, "activity_tracker.db")
-                if os.path.exists(db_path):
-                    os.remove(db_path)
-                
-                # Create new database
-                self.db = ActivityDatabase(db_path=db_path)
-                
-                # Refresh UI
-                self.update_display()
-                self.refresh_history()
-                self.refresh_charts()
-                
-                # Show success message
-                QMessageBox.information(
-                    self,
-                    "Database Reset",
-                    "Database has been successfully reset!\nAll activity records have been deleted.",
-                    QMessageBox.Ok
-                )
-            except Exception as e:
-                QMessageBox.critical(
-                    self,
-                    "Error",
-                    f"Failed to reset database: {str(e)}",
-                    QMessageBox.Ok
-                )
     
     def on_pause_detected(self, pause_duration):
-        """Callback when user returns from a pause - logs pause duration to database"""
-        print(f"[DEBUG] Pause detected: {pause_duration:.1f}s")
+        """Callback from tracker thread - MUST be thread-safe, only emit signal"""
+        print(f"[TRACKER THREAD] Pause detected: {pause_duration:.1f}s - emitting signal")
+        # Emit signal to handle in main thread (thread-safe)
+        self.pause_detected_signal.emit(pause_duration)
+    
+    def on_pause_detected_safe(self, pause_duration):
+        """Thread-safe handler for pause detection - runs in main Qt thread"""
+        print(f"\n[MAIN THREAD] ⏸️ PAUSE DETECTED! Duration: {pause_duration:.1f}s ({pause_duration/60:.1f} minutes)")
+        print(f"[MAIN THREAD] Current pause stats BEFORE: seconds={self.pause_seconds}, count={self.pause_count}")
+        
         try:
+            # Log to database
             self.db.log_pause(int(pause_duration))
-            print(f"[DEBUG] Pause logged successfully")
+            print(f"[MAIN THREAD] ✅ Pause logged to database successfully")
             
-            # Update pause counters
+            # Update pause counters in memory
             self.pause_seconds += int(pause_duration)
             self.pause_count += 1
             
+            print(f"[MAIN THREAD] Current pause stats AFTER: seconds={self.pause_seconds}, count={self.pause_count}")
+            
+            # Force UI update (safe because we're in main thread)
+            self.update_display()
+            
         except Exception as e:
-            print(f"[ERROR] Failed to log pause: {str(e)}")
+            print(f"[MAIN THREAD ERROR] ❌ Failed to log pause: {str(e)}")
+            import traceback
+            traceback.print_exc()
+    
+    def open_analytics(self):
+        """Open advanced analytics window"""
+        self.analytics_window = AnalyticsWindow(self.db)
+        self.analytics_window.show()
     
     def refresh_charts(self):
         """Refresh charts with work, leisure, and pause data"""
-        stats = self.db.get_daily_stats(7)  # Last 7 days
-        pauses = self.db.get_pause_periods(days=7)  # Get pauses for 7 days
+        stats = self.db.get_daily_stats(30)  # Last 30 days for better history view
+        pauses = self.db.get_pause_periods(days=30)  # Get pauses for 30 days
         
         if not stats:
             return
@@ -1166,12 +1589,17 @@ class ModernStopwatchWidget(QMainWindow):
         # Clear figure
         self.figure.clear()
         
+        # Determine figure height based on number of days (for scrolling)
+        num_days = len(dates)
+        fig_height = max(4, 3 + (num_days * 0.15))  # Scale height with number of days
+        self.figure.set_figheight(fig_height)
+        
         # Create subplot with dark theme
         ax = self.figure.add_subplot(111, facecolor='#1e293b')
         
         # Bar positions and width (side-by-side bars)
-        x = range(len(dates))
-        width = 0.28  # Wider bars for better visibility
+        x = range(num_days)
+        width = 0.26  # Slightly narrower for many bars
         
         # Create side-by-side bars: work, leisure, pauses
         bars1 = ax.bar([i - width for i in x], work_hours, width, 
@@ -1182,27 +1610,58 @@ class ModernStopwatchWidget(QMainWindow):
                        label='Pauses', color='#8b5cf6', alpha=0.85)
         
         # Labels and title
-        ax.set_xlabel('Date', color='white', fontweight='bold')
-        ax.set_ylabel('Hours', color='white', fontweight='bold')
-        ax.set_title('Activity Overview - Last 7 Days', color='white', fontweight='bold', pad=20)
+        ax.set_xlabel('Date', color='white', fontweight='bold', fontsize=11)
+        ax.set_ylabel('Hours', color='white', fontweight='bold', fontsize=11)
+        
+        # Dynamic title based on number of days
+        if num_days <= 7:
+            title = f'Activity Overview - Last {num_days} Days'
+        elif num_days <= 30:
+            title = f'Activity Overview - Last {num_days} Days'
+        else:
+            title = 'Activity Overview'
+        
+        ax.set_title(title, color='white', fontweight='bold', pad=15, fontsize=12)
+        
+        # X-axis configuration for better readability with many dates
         ax.set_xticks(x)
-        ax.set_xticklabels(dates, rotation=45, ha='right', color='white', fontsize=10)
-        ax.tick_params(colors='white')
+        if num_days > 14:
+            # Show every other date if more than 14 days
+            ax.set_xticklabels([dates[i] if i % 2 == 0 else '' for i in range(num_days)], 
+                               rotation=45, ha='right', color='white', fontsize=9)
+        else:
+            ax.set_xticklabels(dates, rotation=45, ha='right', color='white', fontsize=10)
+        
+        ax.tick_params(colors='white', labelsize=9)
+        
+        # Set Y-axis with smart scaling
+        max_value = max(max(work_hours + [0]), max(leisure_hours + [0]), max(pause_hours + [0]))
+        if max_value > 0:
+            ax.set_ylim(0, max_value * 1.1)  # 10% padding at top
         
         # Legend
-        legend = ax.legend(facecolor='#0f172a', edgecolor='white', framealpha=0.8, loc='upper left')
+        legend = ax.legend(facecolor='#0f172a', edgecolor='white', framealpha=0.9, 
+                          loc='upper left', fontsize=10)
         for text in legend.get_texts():
             text.set_color('white')
         
         # Grid
-        ax.grid(True, alpha=0.2, color='white', axis='y')
+        ax.grid(True, alpha=0.15, color='white', axis='y', linestyle='--')
         ax.spines['bottom'].set_color('white')
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
         ax.spines['left'].set_color('white')
+        ax.spines['left'].set_linewidth(0.5)
+        ax.spines['bottom'].set_linewidth(0.5)
         
-        # Adjust layout to remove right margin
-        self.figure.subplots_adjust(left=0.1, right=0.95, top=0.95, bottom=0.2)
+        # Better margins for many dates
+        left_margin = 0.12
+        right_margin = 0.95
+        top_margin = 0.93
+        bottom_margin = 0.25 if num_days > 10 else 0.2
+        
+        self.figure.subplots_adjust(left=left_margin, right=right_margin, 
+                                    top=top_margin, bottom=bottom_margin)
         
         # Update canvas
         self.canvas.draw()

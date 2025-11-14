@@ -1,1 +1,1 @@
-idle_threshold=240
+idle_threshold=120
