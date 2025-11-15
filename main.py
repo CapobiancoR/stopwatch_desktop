@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QPushButton, QCheckBox, 
                              QTabWidget, QTableWidget, QTableWidgetItem, 
                              QSystemTrayIcon, QMenu, QAction, QGraphicsDropShadowEffect,
-                             QStackedWidget, QMessageBox, QSlider, QSpinBox)
+                             QStackedWidget, QMessageBox, QSlider, QSpinBox, QScrollArea)
 from PyQt5.QtCore import QTimer, Qt, QTime, QPoint, QPropertyAnimation, QEasingCurve, pyqtSignal, QObject
 from PyQt5.QtGui import QFont, QColor, QPalette, QIcon, QPixmap, QPainter, QLinearGradient
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -34,8 +34,8 @@ class AnalyticsWindow(QMainWindow):
         tabs = QTabWidget()
         tabs.setStyleSheet("QTabWidget::pane { border: 1px solid #3b82f6; } QTabBar::tab { background: #1e293b; color: white; padding: 8px 20px; }")
         
-        # Tab 1: Cumulative daily stats
-        tabs.addTab(self.create_cumulative_chart(), "📊 Cumulative Stats")
+        # Tab 1: Daily stats (fixed - now shows daily hours, not cumulative)
+        tabs.addTab(self.create_cumulative_chart(), "📊 Daily Hours")
         
         # Tab 2: Pie charts
         tabs.addTab(self.create_pie_charts(), "🥧 Distribution")
@@ -66,7 +66,7 @@ class AnalyticsWindow(QMainWindow):
         """
     
     def create_cumulative_chart(self):
-        """Cumulative work/leisure hours over time"""
+        """Daily work/leisure hours over time (NOT cumulative, shows daily totals)"""
         widget = QWidget()
         layout = QVBoxLayout()
         
@@ -78,25 +78,38 @@ class AnalyticsWindow(QMainWindow):
         
         dates = [s[0] for s in stats]
         work_hours = [s[1] / 3600 for s in stats]
-        
-        # Calculate cumulative
-        cumulative = []
-        total = 0
-        for h in work_hours:
-            total += h
-            cumulative.append(total)
+        leisure_hours = [s[2] / 3600 for s in stats]
         
         fig = Figure(figsize=(12, 5), facecolor='#1e293b')
         ax = fig.add_subplot(111, facecolor='#1e293b')
         
-        ax.plot(dates, cumulative, marker='o', color='#10b981', linewidth=2, markersize=4)
-        ax.fill_between(range(len(dates)), cumulative, alpha=0.3, color='#10b981')
+        # Plot daily hours (not cumulative)
+        x = range(len(dates))
+        ax.plot(x, work_hours, marker='o', color='#10b981', linewidth=2, markersize=4, label='Work Hours/Day')
+        ax.plot(x, leisure_hours, marker='s', color='#f59e0b', linewidth=2, markersize=4, label='Leisure Hours/Day')
         
-        ax.set_title('Cumulative Work Hours (90 Days)', color='white', fontsize=14, fontweight='bold')
+        # Fill area under curves
+        ax.fill_between(x, work_hours, alpha=0.3, color='#10b981')
+        ax.fill_between(x, leisure_hours, alpha=0.3, color='#f59e0b')
+        
+        # Add horizontal line at 24 hours for reference
+        ax.axhline(y=24, color='red', linestyle='--', linewidth=1, alpha=0.5, label='24h limit')
+        
+        ax.set_title('Daily Work & Leisure Hours (90 Days)', color='white', fontsize=14, fontweight='bold')
         ax.set_xlabel('Date', color='white')
-        ax.set_ylabel('Hours', color='white')
+        ax.set_ylabel('Hours per Day', color='white')
+        
+        # Set x-axis labels - show every Nth date to avoid clutter
+        step = max(1, len(dates) // 15)  # Show ~15 labels max
+        ax.set_xticks([i for i in range(0, len(dates), step)])
+        ax.set_xticklabels([dates[i] for i in range(0, len(dates), step)], rotation=45, ha='right')
+        
         ax.tick_params(colors='white')
+        ax.legend(loc='upper left', facecolor='#0f172a', edgecolor='white')
         ax.grid(True, alpha=0.2, color='white')
+        
+        # Set y-axis to show 0-24+ hours
+        ax.set_ylim(bottom=0)
         
         for spine in ax.spines.values():
             spine.set_color('white')
@@ -822,17 +835,42 @@ class ModernStopwatchWidget(QMainWindow):
         layout.addWidget(title)
         
         # Create scroll area for the chart (allows scrolling when many days)
-        scroll_area = QWidget()
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background: transparent;
+            }
+            QScrollBar:vertical {
+                background: #1e1e1e;
+                width: 12px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical {
+                background: #3b82f6;
+                border-radius: 6px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #2563eb;
+            }
+        """)
+        
+        scroll_content = QWidget()
         scroll_layout = QVBoxLayout()
         scroll_layout.setContentsMargins(0, 0, 0, 0)
-        scroll_area.setLayout(scroll_layout)
+        scroll_content.setLayout(scroll_layout)
         
-        # Initialize matplotlib figure immediately
-        self.figure = Figure(figsize=(6, 4), facecolor='#1e293b')
+        # Initialize matplotlib figure with larger size
+        self.figure = Figure(figsize=(8, 8), facecolor='#1e293b')
         self.canvas = FigureCanvas(self.figure)
+        self.canvas.setMinimumHeight(600)  # Minimum height to see content
         scroll_layout.addWidget(self.canvas)
-        scroll_layout.addStretch()
         
+        scroll_area.setWidget(scroll_content)
         layout.addWidget(scroll_area)
         
         # Buttons layout
@@ -1663,8 +1701,78 @@ class ModernStopwatchWidget(QMainWindow):
         self.figure.subplots_adjust(left=left_margin, right=right_margin, 
                                     top=top_margin, bottom=bottom_margin)
         
+        # Add interactive tooltips
+        self.add_bar_tooltips(ax, bars1, bars2, bars3, dates, work_hours, leisure_hours, pause_hours)
+        
         # Update canvas
         self.canvas.draw()
+    
+    def add_bar_tooltips(self, ax, bars1, bars2, bars3, dates, work_hours, leisure_hours, pause_hours):
+        """Add interactive tooltips to bar chart"""
+        # Create annotation object (initially invisible)
+        self.chart_annotation = ax.annotate(
+            '', xy=(0, 0), xytext=(15, 15),
+            textcoords='offset points',
+            bbox=dict(boxstyle='round,pad=0.8', facecolor='#1e293b', edgecolor='white', alpha=0.95),
+            arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0', color='white'),
+            color='white',
+            fontsize=10,
+            fontweight='bold',
+            visible=False,
+            zorder=1000
+        )
+        
+        def format_time(hours):
+            """Convert hours to HH:MM:SS format"""
+            total_seconds = int(hours * 3600)
+            h = total_seconds // 3600
+            m = (total_seconds % 3600) // 60
+            s = total_seconds % 60
+            return f"{h:02d}:{m:02d}:{s:02d}"
+        
+        def on_hover(event):
+            """Handle mouse hover events"""
+            if event.inaxes != ax:
+                self.chart_annotation.set_visible(False)
+                self.canvas.draw_idle()
+                return
+            
+            # Check if mouse is over any bar
+            found = False
+            for bars, hours, label, color in [
+                (bars1, work_hours, 'Work', '#10b981'),
+                (bars2, leisure_hours, 'Leisure', '#f59e0b'),
+                (bars3, pause_hours, 'Pauses', '#8b5cf6')
+            ]:
+                for i, (bar, hour) in enumerate(zip(bars, hours)):
+                    if bar.contains(event)[0]:
+                        # Get bar position
+                        x = bar.get_x() + bar.get_width() / 2
+                        y = bar.get_height()
+                        
+                        # Format tooltip text
+                        time_str = format_time(hour)
+                        text = f"{dates[i]}\n{label}: {time_str}\n({hour:.2f}h)"
+                        
+                        # Update annotation
+                        self.chart_annotation.xy = (x, y)
+                        self.chart_annotation.set_text(text)
+                        self.chart_annotation.get_bbox_patch().set_facecolor(color)
+                        self.chart_annotation.get_bbox_patch().set_alpha(0.9)
+                        self.chart_annotation.set_visible(True)
+                        found = True
+                        break
+                
+                if found:
+                    break
+            
+            if not found:
+                self.chart_annotation.set_visible(False)
+            
+            self.canvas.draw_idle()
+        
+        # Connect hover event
+        self.canvas.mpl_connect('motion_notify_event', on_hover)
     
     def closeEvent(self, event):
         """Handle application close"""
