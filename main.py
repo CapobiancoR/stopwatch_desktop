@@ -357,8 +357,8 @@ class AnalyticsWindow(QMainWindow):
 
 
 class ModernStopwatchWidget(QMainWindow):
-    # Signal for thread-safe pause detection
-    pause_detected_signal = pyqtSignal(float)
+    # Signal for thread-safe pause detection (duration, pause_start_timestamp, work_end_timestamp)
+    pause_detected_signal = pyqtSignal(float, float, float)
     
     def __init__(self):
         super().__init__()
@@ -429,15 +429,17 @@ class ModernStopwatchWidget(QMainWindow):
         self.setWindowTitle("⚡ Activity Tracker")
         
         # Frameless window for custom title bar
-        self.setWindowFlags(Qt.FramelessWindowHint)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowSystemMenuHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         
         # Set window icon for taskbar
         icon = QIcon("icon.ico")
         self.setWindowIcon(icon)
         
-        # Window size - wider to avoid scrolling in tables
-        self.setGeometry(100, 100, 520, 600)
+        # Window size - now resizable with min/max constraints
+        self.setGeometry(100, 100, 700, 700)
+        self.setMinimumSize(520, 600)  # Minimum size to ensure usability
+        # No maximum size - can be resized freely
         
         # Central widget with dark background
         central_widget = QWidget()
@@ -581,6 +583,15 @@ class ModernStopwatchWidget(QMainWindow):
         min_button.setCursor(Qt.PointingHandCursor)
         layout.addWidget(min_button)
         
+        # Maximize/Restore button
+        self.max_button = QPushButton("□")
+        self.max_button.setObjectName("maxButton")
+        self.max_button.setFixedSize(35, 35)
+        self.max_button.setFont(QFont("Segoe UI", 16, QFont.Bold))
+        self.max_button.clicked.connect(self.toggle_maximize)
+        self.max_button.setCursor(Qt.PointingHandCursor)
+        layout.addWidget(self.max_button)
+        
         # Close button - centered icon
         close_button = QPushButton("×")
         close_button.setObjectName("closeButton")
@@ -613,9 +624,11 @@ class ModernStopwatchWidget(QMainWindow):
             "💼 Work Time",
             "workCard",
             "#10b981",  # Green
-            "#059669"
+            "#059669",
+            subtitle="0 sessions"
         )
         self.work_time_display = work_card.findChild(QLabel, "timeDisplay")
+        self.work_session_display = work_card.findChild(QLabel, "subtitle")
         layout.addWidget(work_card)
         
         # Leisure time card
@@ -623,9 +636,11 @@ class ModernStopwatchWidget(QMainWindow):
             "🎮 Leisure Time",
             "leisureCard",
             "#f59e0b",  # Orange
-            "#d97706"
+            "#d97706",
+            subtitle="0 sessions"
         )
         self.idle_time_display = leisure_card.findChild(QLabel, "timeDisplay")
+        self.leisure_session_display = leisure_card.findChild(QLabel, "subtitle")
         layout.addWidget(leisure_card)
         
         # Pause time card
@@ -645,9 +660,11 @@ class ModernStopwatchWidget(QMainWindow):
             "🖥 Total Time",
             "totalCard",
             "#3b82f6",  # Blue
-            "#2563eb"
+            "#2563eb",
+            subtitle="0 sessions"
         )
         self.total_time_display = total_card.findChild(QLabel, "timeDisplay")
+        self.total_session_display = total_card.findChild(QLabel, "subtitle")
         layout.addWidget(total_card)
         
         # Leisure mode checkbox
@@ -661,16 +678,20 @@ class ModernStopwatchWidget(QMainWindow):
         
         return widget
     
-    def create_time_card(self, title, object_name, color1, color2, subtitle=None):
+    def create_time_card(self, title, object_name, color1, color2, subtitle=None, extra_padding=False):
         """Create a modern time display card with gradient"""
         card = QWidget()
         card.setObjectName(object_name)
+        
+        # Compact design to fit all cards in the window
         card.setStyleSheet(f"""
             QWidget#{object_name} {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
                     stop:0 {color1}, stop:1 {color2});
-                border-radius: 15px;
-                padding: 15px;
+                border-radius: 12px;
+                padding: 10px;
+                min-height: 75px;
+                max-height: 90px;
             }}
         """)
         
@@ -683,30 +704,31 @@ class ModernStopwatchWidget(QMainWindow):
         card.setGraphicsEffect(shadow)
         
         card_layout = QVBoxLayout()
-        card_layout.setSpacing(5)
+        card_layout.setSpacing(2)
+        card_layout.setContentsMargins(3, 3, 3, 3)
         card.setLayout(card_layout)
         
-        # Title - centered
+        # Title - centered, smaller
         title_label = QLabel(title)
-        title_label.setFont(QFont("Segoe UI", 11, QFont.Bold))
+        title_label.setFont(QFont("Segoe UI", 9, QFont.Bold))
         title_label.setStyleSheet("color: rgba(255, 255, 255, 0.9);")
         title_label.setAlignment(Qt.AlignCenter)
         card_layout.addWidget(title_label)
         
-        # Time display - centered
+        # Time display - centered, smaller
         time_display = QLabel("00:00:00")
         time_display.setObjectName("timeDisplay")
-        time_display.setFont(QFont("Segoe UI", 28, QFont.Bold))
+        time_display.setFont(QFont("Segoe UI", 20, QFont.Bold))
         time_display.setStyleSheet("color: white;")
         time_display.setAlignment(Qt.AlignCenter)
         card_layout.addWidget(time_display)
         
-        # Optional subtitle (for pause count)
+        # Optional subtitle (for pause count) - smaller
         if subtitle is not None:
             subtitle_label = QLabel(subtitle)
             subtitle_label.setObjectName("subtitle")
-            subtitle_label.setFont(QFont("Segoe UI", 9))
-            subtitle_label.setStyleSheet("color: rgba(255, 255, 255, 0.7);")
+            subtitle_label.setFont(QFont("Segoe UI", 8))
+            subtitle_label.setStyleSheet("color: rgba(255, 255, 255, 0.75);")
             subtitle_label.setAlignment(Qt.AlignCenter)
             card_layout.addWidget(subtitle_label)
         
@@ -1079,6 +1101,17 @@ class ModernStopwatchWidget(QMainWindow):
                 background: rgba(59, 130, 246, 0.4);
             }
             
+            QPushButton#maxButton {
+                background: rgba(255, 255, 255, 0.08);
+                color: white;
+                border: none;
+                border-radius: 8px;
+            }
+            
+            QPushButton#maxButton:hover {
+                background: rgba(59, 130, 246, 0.4);
+            }
+            
             QPushButton#closeButton {
                 background: rgba(255, 255, 255, 0.08);
                 color: white;
@@ -1289,6 +1322,32 @@ class ModernStopwatchWidget(QMainWindow):
         if event.button() == Qt.LeftButton:
             self.dragging = False
     
+    def toggle_maximize(self):
+        """Toggle between maximized and normal window state"""
+        if self.isMaximized():
+            self.showNormal()
+            self.max_button.setText("□")
+        else:
+            self.showMaximized()
+            self.max_button.setText("❐")
+    
+    def resizeEvent(self, event):
+        """Handle window resize - make chart responsive"""
+        super().resizeEvent(event)
+        # Refresh chart when window is resized to adjust canvas size
+        if hasattr(self, 'figure') and hasattr(self, 'canvas'):
+            # Update figure size based on window size
+            width = self.width() - 80  # Account for margins
+            height = max(400, self.height() - 200)  # Minimum 400px height
+            
+            # Convert pixels to inches (matplotlib uses inches)
+            dpi = self.figure.get_dpi()
+            self.figure.set_size_inches(width / dpi, height / dpi)
+            
+            # Redraw canvas
+            if self.canvas:
+                self.canvas.draw_idle()
+    
     def init_timer(self):
         """Initialize timer to update UI"""
         self.timer = QTimer()
@@ -1421,21 +1480,8 @@ class ModernStopwatchWidget(QMainWindow):
             """)
         else:
             # User is idle - DO NOT ACCUMULATE TIME
-            if self.session_id is not None:
-                # Close the active session
-                self.db.end_session(self.session_id)
-                # Reload data
-                work, idle = self.db.get_today_stats()
-                self.work_seconds = work
-                self.idle_seconds = idle
-                
-                # Reload pause data
-                pause_seconds, pause_count = self.db.get_today_pause_stats()
-                self.pause_seconds = pause_seconds
-                self.pause_count = pause_count
-                
-                self.session_id = None
-                self.session_start_time = None
+            # DON'T close session here - only close when a pause is actually logged
+            # This prevents creating multiple sessions for brief inactivity periods
             
             # During inactivity, display accumulated time only (no counting)
             display_work = self.work_seconds
@@ -1448,12 +1494,22 @@ class ModernStopwatchWidget(QMainWindow):
                 border-radius: 10px;
             """)
         
+        # Get session counts
+        work_sessions, leisure_sessions = self.db.get_today_session_counts()
+        total_sessions = work_sessions + leisure_sessions
+        
         # Update displays - always show pause time and count
         self.work_time_display.setText(self.format_seconds(display_work))
+        self.work_session_display.setText(f"{work_sessions} session{'s' if work_sessions != 1 else ''}")
+        
         self.idle_time_display.setText(self.format_seconds(display_idle))
+        self.leisure_session_display.setText(f"{leisure_sessions} session{'s' if leisure_sessions != 1 else ''}")
+        
         self.pause_time_display.setText(self.format_seconds(self.pause_seconds))
         self.pause_count_display.setText(f"{self.pause_count} pause{'s' if self.pause_count != 1 else ''}")
-        self.total_time_display.setText(self.format_seconds(display_work + display_idle))
+        
+        self.total_time_display.setText(self.format_seconds(display_work + display_idle + self.pause_seconds))
+        self.total_session_display.setText(f"{total_sessions} session{'s' if total_sessions != 1 else ''}")
     
     def format_seconds(self, seconds):
         """Format seconds as HH:MM:SS"""
@@ -1562,20 +1618,51 @@ class ModernStopwatchWidget(QMainWindow):
         msg.exec_()
     
     
-    def on_pause_detected(self, pause_duration):
+    def on_pause_detected(self, pause_duration, pause_start_timestamp, work_end_timestamp):
         """Callback from tracker thread - MUST be thread-safe, only emit signal"""
-        print(f"[TRACKER THREAD] Pause detected: {pause_duration:.1f}s - emitting signal")
+        print(f"[TRACKER THREAD] Pause detected: {pause_duration:.1f}s")
+        print(f"[TRACKER THREAD] Work ended at: {work_end_timestamp}, Pause started at: {pause_start_timestamp}")
         # Emit signal to handle in main thread (thread-safe)
-        self.pause_detected_signal.emit(pause_duration)
+        self.pause_detected_signal.emit(pause_duration, pause_start_timestamp, work_end_timestamp)
     
-    def on_pause_detected_safe(self, pause_duration):
+    def on_pause_detected_safe(self, pause_duration, pause_start_timestamp, work_end_timestamp):
         """Thread-safe handler for pause detection - runs in main Qt thread"""
         print(f"\n[MAIN THREAD] ⏸️ PAUSE DETECTED! Duration: {pause_duration:.1f}s ({pause_duration/60:.1f} minutes)")
+        print(f"[MAIN THREAD] Work ended at: {work_end_timestamp}")
+        print(f"[MAIN THREAD] Pause started at: {pause_start_timestamp}")
         print(f"[MAIN THREAD] Current pause stats BEFORE: seconds={self.pause_seconds}, count={self.pause_count}")
         
         try:
-            # Log to database
-            self.db.log_pause(int(pause_duration))
+            # First, end the current work session at work_end_timestamp
+            if self.session_id is not None:
+                print(f"[MAIN THREAD] Ending work session {self.session_id} at {work_end_timestamp}")
+                
+                # Calculate session duration up to work_end_timestamp
+                if self.session_start_time:
+                    work_end_datetime = datetime.fromtimestamp(work_end_timestamp)
+                    session_duration = (work_end_datetime - self.session_start_time).total_seconds()
+                    
+                    if session_duration > 0:
+                        print(f"[MAIN THREAD] Session duration: {session_duration:.1f}s")
+                        # Update the session with final duration
+                        self.db.update_session(self.session_id, int(session_duration), self.is_working)
+                
+                # End the session
+                self.db.end_session(self.session_id)
+                
+                # Reload today's stats
+                work, idle = self.db.get_today_stats()
+                self.work_seconds = work
+                self.idle_seconds = idle
+                
+                # Clear session
+                self.session_id = None
+                self.session_start_time = None
+                
+                print(f"[MAIN THREAD] ✅ Work session ended. Total work today: {self.work_seconds}s")
+            
+            # Then log the pause with actual start timestamp
+            self.db.log_pause(int(pause_duration), pause_start_timestamp)
             print(f"[MAIN THREAD] ✅ Pause logged to database successfully")
             
             # Update pause counters in memory

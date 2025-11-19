@@ -124,6 +124,29 @@ class ActivityDatabase:
         
         return work_time, idle_time
     
+    def get_today_session_counts(self) -> Tuple[int, int]:
+        """Return today's work and leisure session counts"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        today = date.today().strftime("%Y-%m-%d")
+        
+        cursor.execute('''
+            SELECT 
+                SUM(CASE WHEN is_work = 1 THEN 1 ELSE 0 END) as work_sessions,
+                SUM(CASE WHEN is_work = 0 THEN 1 ELSE 0 END) as leisure_sessions
+            FROM activity_sessions
+            WHERE date = ?
+        ''', (today,))
+        
+        result = cursor.fetchone()
+        conn.close()
+        
+        work_sessions = result[0] if result[0] else 0
+        leisure_sessions = result[1] if result[1] else 0
+        
+        return work_sessions, leisure_sessions
+    
     def get_daily_stats(self, days: int = 7) -> List[Tuple[str, int, int]]:
         """Return statistics for the last N days"""
         conn = sqlite3.connect(self.db_path)
@@ -166,15 +189,33 @@ class ActivityDatabase:
         
         return results
     
-    def log_pause(self, duration_seconds: int):
-        """Log a pause/break period"""
+    def log_pause(self, duration_seconds: int, pause_start_timestamp: float = None):
+        """Log a pause/break period
+        Args:
+            duration_seconds: Duration of the pause in seconds
+            pause_start_timestamp: Unix timestamp when pause started (if None, calculated from now-duration)
+        """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         now = datetime.now()
-        date_str = now.strftime("%Y-%m-%d")
-        pause_start = (now - timedelta(seconds=int(duration_seconds))).strftime("%H:%M:%S")
-        pause_end = now.strftime("%H:%M:%S")
+        
+        # Use actual start timestamp if provided, otherwise calculate
+        if pause_start_timestamp:
+            pause_start_dt = datetime.fromtimestamp(pause_start_timestamp)
+            pause_start = pause_start_dt.strftime("%H:%M:%S")
+            # Calculate end time from start + duration
+            pause_end_dt = pause_start_dt + timedelta(seconds=int(duration_seconds))
+            pause_end = pause_end_dt.strftime("%H:%M:%S")
+            # Date is from when pause started
+            date_str = pause_start_dt.strftime("%Y-%m-%d")
+            
+            print(f"[DATABASE] Pause with timestamps: start={pause_start_dt}, end={pause_end_dt}, duration={duration_seconds}s")
+        else:
+            # Fallback: calculate from duration (old behavior)
+            date_str = now.strftime("%Y-%m-%d")
+            pause_start = (now - timedelta(seconds=int(duration_seconds))).strftime("%H:%M:%S")
+            pause_end = now.strftime("%H:%M:%S")
         
         print(f"[DATABASE] Logging pause: date={date_str}, start={pause_start}, end={pause_end}, duration={duration_seconds}s")
         
